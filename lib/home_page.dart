@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_nfc_kit/flutter_nfc_kit.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 import 'package:loader_overlay/loader_overlay.dart';
+import 'package:ndef/ndef.dart' as ndef;
 import 'package:permission_handler/permission_handler.dart';
 
 class HomePage extends StatefulWidget {
@@ -124,8 +126,37 @@ class _HomePageState extends State<HomePage> {
                                       itemBuilder: (context, index) {
                                         return InkWell(
                                           onTap: () async {
-                                            await FlutterNfcKit.writeBlock(
-                                                index, value[index]);
+                                            try {
+                                              var tag = await FlutterNfcKit.poll(
+                                                  timeout: const Duration(
+                                                      seconds: 10),
+                                                  iosMultipleTagMessage:
+                                                      "Multiple tags found!",
+                                                  iosAlertMessage:
+                                                      "Scan your tag");
+                                              if (tag.ndefWritable ?? false) {
+                                                String contactData =
+                                                    "BEGIN:VCARD\nVERSION:3.0\n${value[index].name}\nTEL:${value[index].phones.first.number}\nEMAIL:${value[index].emails.isNotEmpty ? value[index].emails.first : ''}\nEND:VCARD";
+                                                await FlutterNfcKit
+                                                    .writeNDEFRawRecords([
+                                                  NDEFRawRecord(
+                                                      '0',
+                                                      contactData,
+                                                      'String',
+                                                      ndef.TypeNameFormat
+                                                          .unknown)
+                                                ]);
+                                              } else {
+                                                Fluttertoast.showToast(
+                                                    msg:
+                                                        'Card is not writable');
+                                              }
+                                              // await FlutterNfcKit.writeBlock(
+                                              //     index, contactData);
+                                            } catch (e) {
+                                              Fluttertoast.showToast(
+                                                  msg: e.toString());
+                                            }
                                           },
                                           child: Row(
                                             children: [
@@ -205,31 +236,7 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
                 InkWell(
-                  onTap: () async {
-                    context.loaderOverlay.show();
-                    var tag = await FlutterNfcKit.poll(
-                        timeout: const Duration(seconds: 10),
-                        iosMultipleTagMessage: "Multiple tags found!",
-                        iosAlertMessage: "Scan your tag");
-                    if (tag.ndefAvailable ?? false) {
-                      for (var record in await FlutterNfcKit.readNDEFRecords(
-                          cached: false)) {
-                        print(record.toString());
-                        var d = data + record.basicInfoString;
-                        setState(() {
-                          data = d;
-                        });
-                      }
-                      final recordList =
-                          await FlutterNfcKit.readNDEFRawRecords(cached: false);
-
-                      for (int i = 0; i < (recordList.length); i++) {
-                        recordList.removeAt(i);
-                      }
-                      await FlutterNfcKit.writeNDEFRawRecords(recordList);
-                    }
-                    context.loaderOverlay.hide();
-                  },
+                  onTap: onRemove,
                   child: Card(
                     child: SizedBox(
                       width: MediaQuery.of(context).size.width * .5,
@@ -285,5 +292,38 @@ class _HomePageState extends State<HomePage> {
     List<Contact> contacts = await FlutterContacts.getContacts(
         withProperties: true, withPhoto: true);
     return contacts;
+  }
+
+  Future<void> onRemove() async {
+    context.loaderOverlay.show();
+    try {
+      var tag = await FlutterNfcKit.poll(
+          timeout: const Duration(seconds: 10),
+          iosMultipleTagMessage: "Multiple tags found!",
+          iosAlertMessage: "Scan your tag");
+      if (tag.ndefAvailable ?? false) {
+        for (var record in await FlutterNfcKit.readNDEFRecords(cached: false)) {
+          print(record.toString());
+          var d = data + record.basicInfoString;
+          setState(() {
+            data = d;
+          });
+        }
+        final recordList =
+            await FlutterNfcKit.readNDEFRawRecords(cached: false);
+
+        for (int i = 0; i < (recordList.length); i++) {
+          recordList.removeAt(i);
+        }
+        await FlutterNfcKit.writeNDEFRawRecords(recordList);
+      } else {
+        Fluttertoast.showToast(msg: 'No tags found');
+      }
+    } catch (e) {
+      Fluttertoast.showToast(msg: e.toString());
+    }
+    if (mounted) {
+      context.loaderOverlay.hide();
+    }
   }
 }
