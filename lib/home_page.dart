@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
-import 'package:flutter_nfc_kit/flutter_nfc_kit.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:loader_overlay/loader_overlay.dart';
-import 'package:ndef/ndef.dart' as ndef;
+import 'package:nfc_manager/nfc_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class HomePage extends StatefulWidget {
@@ -54,31 +52,39 @@ class _HomePageState extends State<HomePage> {
                       child: InkWell(
                         onTap: () async {
                           {
-                            var tag = await FlutterNfcKit.poll(
-                                timeout: const Duration(seconds: 10),
-                                iosMultipleTagMessage: "Multiple tags found!",
-                                iosAlertMessage: "Scan your tag");
-                            if (tag.ndefAvailable ?? false) {
-                              for (var record
-                                  in await FlutterNfcKit.readNDEFRecords(
-                                      cached: false)) {
-                                print(record.toString());
-                                var d = data + record.basicInfoString;
-                                setState(() {
-                                  data = d;
-                                });
-                              }
-                              final recordList =
-                                  await FlutterNfcKit.readNDEFRawRecords(
-                                      cached: false);
+                            context.loaderOverlay.show();
+                            try {
+                              bool isAvailable =
+                                  await NfcManager.instance.isAvailable();
 
-                              for (var record in recordList) {
-                                var d = data + record.identifier;
-                                setState(() {
-                                  data = d;
-                                });
+                              //We first check if NFC is available on the device.
+                              if (isAvailable) {
+                                //If NFC is available, start an NFC session and listen for NFC tags to be discovered.
+                                NfcManager.instance.startSession(
+                                  onError: (err) {
+                                    throw err.message;
+                                  },
+                                  pollingOptions: <NfcPollingOption>{},
+                                  onDiscovered: (NfcTag tag) async {
+                                    // Process NFC tag, When an NFC tag is discovered, print its data to the console.
+                                    debugPrint('NFC Tag Detected: ${tag.data}');
+                                  },
+                                );
+                              } else {
+                                debugPrint('NFC not available.');
+                                if (mounted) {
+                                  context.loaderOverlay.hide();
+                                }
                               }
+                            } catch (e) {
+                              if (mounted) {
+                                context.loaderOverlay.hide();
+                              }
+                              debugPrint('Error reading NFC: $e');
                             }
+                          }
+                          if (mounted) {
+                            context.loaderOverlay.hide();
                           }
                         },
                         child: Card(
@@ -126,36 +132,46 @@ class _HomePageState extends State<HomePage> {
                                       itemBuilder: (context, index) {
                                         return InkWell(
                                           onTap: () async {
-                                            try {
-                                              var tag = await FlutterNfcKit.poll(
-                                                  timeout: const Duration(
-                                                      seconds: 10),
-                                                  iosMultipleTagMessage:
-                                                      "Multiple tags found!",
-                                                  iosAlertMessage:
-                                                      "Scan your tag");
-                                              if (tag.ndefWritable ?? false) {
-                                                String contactData =
-                                                    "BEGIN:VCARD\nVERSION:3.0\n${value[index].name}\nTEL:${value[index].phones.first.number}\nEMAIL:${value[index].emails.isNotEmpty ? value[index].emails.first : ''}\nEND:VCARD";
-                                                await FlutterNfcKit
-                                                    .writeNDEFRawRecords([
-                                                  NDEFRawRecord(
-                                                      '0',
-                                                      contactData,
-                                                      'String',
-                                                      ndef.TypeNameFormat
-                                                          .unknown)
-                                                ]);
-                                              } else {
-                                                Fluttertoast.showToast(
-                                                    msg:
-                                                        'Card is not writable');
+                                            context.loaderOverlay.show();
+                                            NfcManager.instance.startSession(
+                                                onDiscovered:
+                                                    (NfcTag tag) async {
+                                              var ndef = Ndef.from(tag);
+                                              if (ndef == null ||
+                                                  !ndef.isWritable) {
+                                                data =
+                                                    'Tag is not ndef writable';
+                                                NfcManager.instance.stopSession(
+                                                    errorMessage: data);
+                                                return;
                                               }
-                                              // await FlutterNfcKit.writeBlock(
-                                              //     index, contactData);
-                                            } catch (e) {
-                                              Fluttertoast.showToast(
-                                                  msg: e.toString());
+                                              NdefMessage message =
+                                                  NdefMessage([
+                                                NdefRecord.createText(
+                                                    "${value[index].name.first} ${value[index].name.middle} ${value[index].name.last}"),
+                                                NdefRecord.createUri(Uri.parse(
+                                                    'tel:${value[index].phones.first.number}')),
+                                              ]);
+
+                                              try {
+                                                await ndef.write(message);
+                                                data =
+                                                    'Success to "Ndef Write"';
+                                                NfcManager.instance
+                                                    .stopSession();
+                                              } catch (e) {
+                                                if (mounted) {
+                                                  context.loaderOverlay.hide();
+                                                }
+                                                data = e.toString();
+                                                NfcManager.instance.stopSession(
+                                                    errorMessage:
+                                                        data.toString());
+                                                return;
+                                              }
+                                            });
+                                            if (mounted) {
+                                              context.loaderOverlay.hide();
                                             }
                                           },
                                           child: Row(
@@ -296,32 +312,13 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> onRemove() async {
     context.loaderOverlay.show();
-    try {
-      var tag = await FlutterNfcKit.poll(
-          timeout: const Duration(seconds: 10),
-          iosMultipleTagMessage: "Multiple tags found!",
-          iosAlertMessage: "Scan your tag");
-      if (tag.ndefAvailable ?? false) {
-        for (var record in await FlutterNfcKit.readNDEFRecords(cached: false)) {
-          print(record.toString());
-          var d = data + record.basicInfoString;
-          setState(() {
-            data = d;
-          });
-        }
-        final recordList =
-            await FlutterNfcKit.readNDEFRawRecords(cached: false);
+    NfcManager.instance.startSession(onDiscovered: (tag) async {
+      var ndef = Ndef.from(tag);
+      NdefMessage message = NdefMessage([NdefRecord.createText('')]);
 
-        for (int i = 0; i < (recordList.length); i++) {
-          recordList.removeAt(i);
-        }
-        await FlutterNfcKit.writeNDEFRawRecords(recordList);
-      } else {
-        Fluttertoast.showToast(msg: 'No tags found');
-      }
-    } catch (e) {
-      Fluttertoast.showToast(msg: e.toString());
-    }
+      var val = await ndef!.write(message);
+      NfcManager.instance.stopSession();
+    });
     if (mounted) {
       context.loaderOverlay.hide();
     }
